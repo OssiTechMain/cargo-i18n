@@ -546,13 +546,7 @@ pub fn fl(input: TokenStream) -> TokenStream {
             }
         }
         FlArgs::KeyValuePairs { specified_args } => {
-            let mut arg_assignments = proc_macro2::TokenStream::default();
-            for (key, value) in &specified_args {
-                arg_assignments = quote! {
-                    #arg_assignments
-                    args.insert(#key, #value.into());
-                }
-            }
+            let arg_assignments = deterministic_arg_assignments(&specified_args);
 
             if attr_lit.is_none() {
                 if let Some(message_id_str) = &message_id_string {
@@ -668,6 +662,62 @@ pub fn fl(input: TokenStream) -> TokenStream {
     }
 
     gen.into()
+}
+
+fn deterministic_arg_assignments(
+    specified_args: &HashMap<syn::LitStr, Box<syn::Expr>>,
+) -> proc_macro2::TokenStream {
+    let mut specified_args: Vec<_> = specified_args.iter().collect();
+    specified_args.sort_by(|(left, _), (right, _)| left.value().cmp(&right.value()));
+
+    let mut arg_assignments = proc_macro2::TokenStream::default();
+    for (key, value) in specified_args {
+        arg_assignments = quote! {
+            #arg_assignments
+            args.insert(#key, #value.into());
+        };
+    }
+    arg_assignments
+}
+
+#[cfg(test)]
+mod deterministic_emission_tests {
+    use super::*;
+    use syn::parse_quote;
+
+    fn assignments(reverse_insertion: bool) -> String {
+        let mut args = HashMap::new();
+        let left: Box<syn::Expr> = Box::new(parse_quote!(left_value));
+        let right: Box<syn::Expr> = Box::new(parse_quote!(right_value));
+        if reverse_insertion {
+            args.insert(
+                syn::LitStr::new("right", proc_macro2::Span::call_site()),
+                right,
+            );
+            args.insert(
+                syn::LitStr::new("left", proc_macro2::Span::call_site()),
+                left,
+            );
+        } else {
+            args.insert(
+                syn::LitStr::new("left", proc_macro2::Span::call_site()),
+                left,
+            );
+            args.insert(
+                syn::LitStr::new("right", proc_macro2::Span::call_site()),
+                right,
+            );
+        }
+        deterministic_arg_assignments(&args).to_string()
+    }
+
+    #[test]
+    fn named_argument_token_emission_is_deterministic() {
+        let forward = assignments(false);
+        let reverse = assignments(true);
+        assert_eq!(forward, reverse);
+        assert!(forward.find("left").unwrap() < forward.find("right").unwrap());
+    }
 }
 
 fn fuzzy_message_suggestions(
